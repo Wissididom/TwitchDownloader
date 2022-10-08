@@ -2,11 +2,14 @@ import dotenv from 'dotenv';
 dotenv.config();
 import { spawn } from 'child_process';
 import clipboard from 'clipboardy';
+import * as readline from 'readline';
 
 const PREVIEW = 0;
 const DOWNLOAD = 1;
 const SHOW_URL = 2;
 const COPY_URL = 3;
+const PLAY_AUDIO_ONLY = 4;
+const PLAY_VIDEO_ONLY = 5;
 let mode = PREVIEW;
 
 let args = process.argv.slice(2);
@@ -34,6 +37,14 @@ async function main(args) {
 			case 'cu':
 				mode = COPY_URL;
 				break;
+			case 'play_audio_only':
+			case 'pao':
+				mode = PLAY_AUDIO_ONLY;
+				break;
+			case 'play_video_only':
+			case 'pvo':
+				mode = PLAY_VIDEO_ONLY;
+				break;
 			default:
 				printUsage();
 				return;
@@ -54,11 +65,11 @@ async function main(args) {
 	if (args.length > 1) {
 		switch (mode) {
 			case PREVIEW:
-				preview(args[1], showUrl, showBanner, waitFor);
+				await preview(args[1], showUrl, showBanner, waitFor);
 				break;
 			case DOWNLOAD:
 				if (args.length > 2)
-					download(args[1], args[2], showUrl, showBanner, waitFor);
+					await download(args[1], args[2], showUrl, showBanner, waitFor);
 				else
 					printUsage();
 				break;
@@ -79,6 +90,12 @@ async function main(args) {
 				} catch (e) {
 					console.error(e.stack);
 				}
+				break;
+			case PLAY_AUDIO_ONLY:
+				await playAudioOnly(args[1], showUrl, showBanner, waitFor);
+				break;
+			case PLAY_VIDEO_ONLY:
+				await playVideoOnly(args[1], showUrl, showBanner, waitFor);
 				break;
 		}
 	} else {
@@ -185,17 +202,17 @@ async function preview(url, printUrlToConsole, showBanner, waitFor) {
 					console.log(`${url}: 404 Not Found`);
 			}, 60 * 1000); // 1 Minute
 		} else {
-			let readline = require('readline').createInterface({
+			let rl = readline.createInterface({
 				input: process.stdin,
 				output: process.stdout
 			});
-			readline.question('Should I wait for the stream to go online (y,n): ', input => {
+			rl.question('Should I wait for the stream to go online (y,n): ', input => {
 				let mayRun = true;
 				if (!input.toLowerCase() == 'y' && !input.toLowerCase() == 'n') {
 					console.log('Please either type y or n!');
 					mayRun = false;
 				}
-				readline.close();
+				rl.close();
 				if (mayRun && input.toLowerCase() == 'y')
 					preview(url, printUrlToConsole, showBanner, true);
 			});
@@ -222,17 +239,177 @@ async function download(url, filepath, printUrlToConsole, showBanner, waitFor) {
 					console.log(`${url}: 404 Not Found`);
 			}, 60 * 1000); // 1 Minute
 		} else {
-			let readline = require('readline').createInterface({
+			let rl = readline.createInterface({
 				input: process.stdin,
 				output: process.stdout
 			});
-			readline.question('Should I wait for the stream to go online (y,n): ', input => {
+			rl.question('Should I wait for the stream to go online (y,n): ', input => {
 				let mayRun = true;
 				if (!input.toLowerCase() == 'y' && !input.toLowerCase() == 'n') {
 					console.log('Please either type y or n!');
 					mayRun = false;
 				}
-				readline.close();
+				rl.close();
+				if (mayRun && input.toLowerCase() == 'y')
+					download(url, filepath, printUrlToConsole, showBanner, true);
+			});
+		}
+	}
+	if (child == null)
+		return;
+	console.log('ffmpeg should get started. When not then ffmpeg is not installed or not in the PATH. You can get it from https://ffmpeg.org/');
+}
+
+
+async function getAudioOnlyProcess(url, printToConsole, showBanner) {
+	let args = [];
+	if (!showBanner)
+		args.push('-hide_banner');
+	args.push('-autoexit');
+	args.push('-i');
+	let downloadUrl = await getUrl(url, printToConsole);
+	if (downloadUrl.substring(0, 4) != 'http') {
+		console.error(`Doesn't start with http: ${downloadUrl}`);
+		return null;
+	}
+	if (!checkAccessible(downloadUrl))
+		throw new Error('Stream could not be found');
+	let ffmpeg = spawn ('ffmpeg', ['-hide_banner', '-i', downloadUrl, '-map', /*'p:4',*/ '-vn', '-f', 'mpegts', '-']);
+	let ffplay = spawn('ffplay', [...args, '-i', '-']);
+	ffmpeg.stdout.pipe(ffplay.stdin);
+	ffplay.stderr.on('data', data => {
+		console.error(data.toString());
+	});
+	ffmpeg.on('error', error => {
+		console.error(`error: ${error.message}`);
+	});
+	ffmpeg.on('exit', (code, signal) => {
+		if (code) console.log(`FFMPEG-Process exited with code: ${code}`);
+		if (signal) console.log(`FFMPEG-Process killed with signal: ${signal}`);
+	});
+	ffplay.stdout.on('data', data => {
+		console.log(data.toString());
+	});
+	ffplay.stderr.on('data', data => {
+		console.error(data.toString());
+	});
+	ffplay.on('error', error => {
+		console.error(`error: ${error.message}`);
+	});
+	ffplay.on('exit', (code, signal) => {
+		if (code) console.log(`FFPLAY-Process exited with code: ${code}`);
+		if (signal) console.log(`FFPLAY-Process killed with signal: ${signal}`);
+	});
+	return ffplay;
+}
+
+async function playAudioOnly(url, printUrlToConsole, showBanner, waitFor) {
+	let child = null;
+	try {
+		child = getAudioOnlyProcess(url, printUrlToConsole, showBanner);
+		if (child == null)
+			console.error("Error - Check your entered values or internet connection");
+	} catch (e) {
+		console.log(e);
+		if (waitFor) {
+			let interval = setInterval(async () => {
+				let downloadUrl = await getUrl(url);
+				if (checkAccessible(downloadUrl))
+					clearInterval(interval);
+				else
+					console.log(`${url}: 404 Not Found`);
+			}, 60 * 1000); // 1 Minute
+		} else {
+			let rl = readline.createInterface({
+				input: process.stdin,
+				output: process.stdout
+			});
+			rl.question('Should I wait for the stream to go online (y,n): ', input => {
+				let mayRun = true;
+				if (!input.toLowerCase() == 'y' && !input.toLowerCase() == 'n') {
+					console.log('Please either type y or n!');
+					mayRun = false;
+				}
+				rl.close();
+				if (mayRun && input.toLowerCase() == 'y')
+					download(url, filepath, printUrlToConsole, showBanner, true);
+			});
+		}
+	}
+	if (child == null)
+		return;
+	console.log('ffmpeg should get started. When not then ffmpeg is not installed or not in the PATH. You can get it from https://ffmpeg.org/');
+}
+
+async function getVideoOnlyProcess(url, printToConsole, showBanner) {
+	let args = [];
+	if (!showBanner)
+		args.push('-hide_banner');
+	args.push('-autoexit');
+	args.push('-i');
+	let downloadUrl = await getUrl(url, printToConsole);
+	if (downloadUrl.substring(0, 4) != 'http') {
+		console.error(`Doesn't start with http: ${downloadUrl}`);
+		return null;
+	}
+	if (!checkAccessible(downloadUrl))
+		throw new Error('Stream could not be found');
+	let ffmpeg = spawn ('ffmpeg', ['-hide_banner', '-i', downloadUrl, '-map', /*'p:4',*/ '-an', '-f', 'mpegts', '-']);
+	let ffplay = spawn('ffplay', [...args, '-i', '-']);
+	ffmpeg.stdout.pipe(ffplay.stdin);
+	ffplay.stderr.on('data', data => {
+		console.error(data.toString());
+	});
+	ffmpeg.on('error', error => {
+		console.error(`error: ${error.message}`);
+	});
+	ffmpeg.on('exit', (code, signal) => {
+		if (code) console.log(`FFMPEG-Process exited with code: ${code}`);
+		if (signal) console.log(`FFMPEG-Process killed with signal: ${signal}`);
+	});
+	ffplay.stdout.on('data', data => {
+		console.log(data.toString());
+	});
+	ffplay.stderr.on('data', data => {
+		console.error(data.toString());
+	});
+	ffplay.on('error', error => {
+		console.error(`error: ${error.message}`);
+	});
+	ffplay.on('exit', (code, signal) => {
+		if (code) console.log(`FFPLAY-Process exited with code: ${code}`);
+		if (signal) console.log(`FFPLAY-Process killed with signal: ${signal}`);
+	});
+	return ffplay;
+}
+
+async function playVideoOnly(url, printUrlToConsole, showBanner, waitFor) {
+	let child = null;
+	try {
+		child = getVideoOnlyProcess(url, printUrlToConsole, showBanner);
+		if (child == null)
+			console.error("Error - Check your entered values or internet connection");
+	} catch (e) {
+		if (waitFor) {
+			let interval = setInterval(async () => {
+				let downloadUrl = await getUrl(url);
+				if (checkAccessible(downloadUrl))
+					clearInterval(interval);
+				else
+					console.log(`${url}: 404 Not Found`);
+			}, 60 * 1000); // 1 Minute
+		} else {
+			let rl = readline.createInterface({
+				input: process.stdin,
+				output: process.stdout
+			});
+			rl.question('Should I wait for the stream to go online (y,n): ', input => {
+				let mayRun = true;
+				if (!input.toLowerCase() == 'y' && !input.toLowerCase() == 'n') {
+					console.log('Please either type y or n!');
+					mayRun = false;
+				}
+				rl.close();
 				if (mayRun && input.toLowerCase() == 'y')
 					download(url, filepath, printUrlToConsole, showBanner, true);
 			});
