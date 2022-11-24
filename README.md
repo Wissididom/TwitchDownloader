@@ -1,4 +1,4 @@
-# Welcome to TwitchLiveDownloader!
+# Welcome to TwitchDownloader!
 
 This Tool is for downloading VODs and livestreams from https://www.twitch.tv/. Commandlinesyntax following below:
 
