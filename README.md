@@ -1,3 +1,7 @@
+# Archived
+
+I do not want to do anything with Twitch's GraphQL API anymore as I think Twitch doesn't like us using it.
+
 # Welcome to TwitchDownloader!
 
 This Tool is for downloading VODs and livestreams from https://www.twitch.tv/. Commandlinesyntax following below:
